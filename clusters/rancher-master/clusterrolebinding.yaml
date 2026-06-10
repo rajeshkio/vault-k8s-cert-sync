@@ -1,0 +1,16 @@
+# clusters/rancher-master/clusterrolebinding.yaml
+# Grants vault-auth SA the system:auth-delegator role so Vault can
+# use it to validate tokens from other service accounts (TokenReview API).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-auth-tokenreview-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: vault-auth
+  namespace: vault
