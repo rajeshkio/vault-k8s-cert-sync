@@ -65,7 +65,7 @@ vault-k8s-cert-sync/
 │       ├── cert-manager-policy.hcl     # read/write to kv/*
 │       └── external-secrets-policy.hcl # read-only from kv/*
 ├── clusters/
-│   └── rancher-master/
+│   └── <primary-cluster/mount>/
 │       └── pushsecret.yaml             # PushSecret for cert to Vault
 ├── scripts/
 │   ├── bootstrap-vault.sh              # run once after unseal
@@ -188,7 +188,7 @@ The script handles everything in one shot:
 Once cert-manager has issued a certificate on the primary cluster:
 
 ```bash
-kubectl apply -f clusters/rancher-master/pushsecret.yaml
+kubectl apply -f clusters/<primary-cluster/mount>/pushsecret.yaml
 kubectl get pushsecret push-rajesh-cert -n certificates -w
 ```
 

@@ -6,7 +6,7 @@
 # Does NOT configure any cluster — use add-cluster.sh for that.
 #
 # USAGE:
-#   ./scripts/bootstrap-vault.sh
+#   ./scripts/bootstrap-vault.sh 
 #
 # REQUIREMENTS:
 #   - kubectl context set to the cluster where Vault is running
@@ -16,6 +16,9 @@ set -euo pipefail
 
 VAULT_NS="vault"
 VAULT_POD="vault-0"
+
+VAULT_CONTEXT=$(kubectl config current-context)
+echo "    Using context: ${VAULT_CONTEXT}"
 
 log() { echo ""; echo "==> $1"; }
 ok()  { echo "    ✓ $1"; }
@@ -51,14 +54,16 @@ echo "Bootstrap complete. Now add clusters:"
 echo ""
 echo "  Primary cluster (cert-manager + external-secrets roles):"
 echo "  ./scripts/add-cluster.sh \\"
-echo "    --context rancher-master \\"
+echo "    --context ${VAULT_CONTEXT} \\"
 echo "    --kube-host https://<IP>:6443 \\"
-echo "    --mount rancher-master \\"
-echo "    --type primary"
+echo "    --mount <primary-cluster-name> \\"
+echo "    --type primary \\" 
+echo "    --vault-url https://<your-vault-domain>"
 echo ""
 echo "  Secondary cluster (external-secrets role only):"
 echo "  ./scripts/add-cluster.sh \\"
-echo "    --context k3s-server \\"
+echo "    --context <secondary-cluster-kube-context> \\"
 echo "    --kube-host https://<IP>:6443 \\"
-echo "    --mount k3s-cluster \\"
-echo "    --type secondary"
+echo "    --mount <secondary-cluster-name> \\"
+echo "    --type secondary \\"
+echo "    --vault-url https://<your-vault-domain>"

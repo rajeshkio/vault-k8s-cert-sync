@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 # scripts/02-test-externalsecret.sh
 #
-# Creates a test ExternalSecret on each cluster and verifies the secret
-# is pulled from Vault successfully.
+# Creates a test ExternalSecret on each cluster and verifies sync.
+#
+# Usage:
+#   ./scripts/02-test-externalsecret.sh \
+#     --primary <context> \
+#     [--secondary <context>] \
+#     [--secondary <context>]
+#
+# Example:
+#   ./scripts/02-test-externalsecret.sh \
+#     --primary default \
+#     --secondary k3s-server \
+#     --secondary rke2-server
 # Assumes the PushSecret has already synced "rajesh-tls-cert" to Vault.
 
 set -euo pipefail
@@ -69,16 +80,36 @@ print('    Keys found:', list(d.keys()))
   fi
 }
 
-run_test "rancher-master" "SecretStore"      "vault-backend"        "external-secrets"
-run_test "k3s-server"     "ClusterSecretStore" "vault-backend-access" "external-secrets"
-run_test "rke2-server"    "ClusterSecretStore" "vault-backend-access" "external-secrets"
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
+PRIMARY_CONTEXTS=()
+SECONDARY_CONTEXTS=()
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --primary)   PRIMARY_CONTEXTS+=("$2");   shift 2 ;;
+    --secondary) SECONDARY_CONTEXTS+=("$2"); shift 2 ;;
+    *) echo "ERROR: Unknown argument: $1"; exit 1 ;;
+  esac
+done
+
+[[ ${#PRIMARY_CONTEXTS[@]} -eq 0 ]] \
+  && echo "ERROR: at least one --primary context is required" && exit 1
+
+for ctx in "${PRIMARY_CONTEXTS[@]}"; do
+  run_test "${ctx}" "SecretStore" "vault-backend" "external-secrets"
+done
+
+for ctx in "${SECONDARY_CONTEXTS[@]}"; do
+  run_test "${ctx}" "ClusterSecretStore" "vault-backend-access" "external-secrets"
+done
 
 echo ""
 echo "==> Test results: ${PASS} passed, ${FAIL} failed"
 
 echo ""
 echo "==> Cleaning up test ExternalSecrets..."
-for ctx in rancher-master k3s-server rke2-server; do
+for ctx in "${PRIMARY_CONTEXTS[@]}" "${SECONDARY_CONTEXTS[@]}"; do
   kubectl config use-context "${ctx}"
   kubectl delete externalsecret test-vault-cert-sync -n external-secrets --ignore-not-found
   kubectl delete secret test-tls-cert -n external-secrets --ignore-not-found
@@ -90,7 +121,7 @@ if [ "${FAIL}" -gt 0 ]; then
   echo "Some tests failed. Common causes:"
   echo "  - Vault role missing audience=vault (Vault 1.21+)"
   echo "  - Wrong apiVersion in SecretStore (use v1 for ESO v0.17+)"
+  echo "  - serviceAccountRef missing audiences: [vault] (ESO v2.x)"
   echo "  - Token reviewer SA missing system:auth-delegator binding"
-  echo "  - PushSecret has not synced the cert to Vault yet"
   exit 1
 fi

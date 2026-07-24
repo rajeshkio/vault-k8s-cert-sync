@@ -11,6 +11,15 @@
 #     --kube-host <api-server-url> \
 #     --mount <vault-auth-mount-name> \
 #     --type <primary|secondary>
+#     --vault-url https://<your-vault-domain>
+#
+# Example:
+#   ./scripts/add-cluster.sh \
+#     --context default \
+#     --kube-host https://192.168.90.100:6443 \
+#     --mount suse-ai \
+#     --type primary \
+#     --vault-url https://vault.rajesh-kumar.in
 #
 # primary   = vault-auth + cert-manager + cert-pusher + external-secrets SAs
 #             Vault roles: cert-manager, cert-pusher, external-secrets
@@ -24,14 +33,15 @@ set -euo pipefail
 
 VAULT_NS="vault"
 VAULT_POD="vault-0"
-VAULT_CONTEXT="default"
-VAULT_URL="https://vault.rajesh-kumar.in"
+VAULT_CONTEXT=$(kubectl config current-context)
+echo "Vault context (current): ${VAULT_CONTEXT}"
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 CONTEXT=""
 KUBE_HOST=""
 MOUNT=""
 TYPE=""
+VAULT_URL=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -39,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --kube-host) KUBE_HOST="$2"; shift 2 ;;
     --mount)     MOUNT="$2";     shift 2 ;;
     --type)      TYPE="$2";      shift 2 ;;
+    --vault-url)     VAULT_URL="$2";     shift 2 ;;
     *) echo "ERROR: Unknown argument: $1"; exit 1 ;;
   esac
 done
@@ -48,6 +59,7 @@ done
 [[ -z "$KUBE_HOST" ]] && echo "ERROR: --kube-host is required" && exit 1
 [[ -z "$MOUNT"     ]] && echo "ERROR: --mount is required"     && exit 1
 [[ -z "$TYPE"      ]] && echo "ERROR: --type must be primary|secondary" && exit 1
+[[ -z "$VAULT_URL"     ]] && echo "ERROR: --vault-url is required"     && exit 1
 [[ "$TYPE" != "primary" && "$TYPE" != "secondary" ]] && \
   echo "ERROR: --type must be 'primary' or 'secondary'" && exit 1
 
@@ -261,6 +273,29 @@ MANIFEST
     && ok "SecretStore is Ready" \
     || echo "    ⚠ SecretStore status: ${STATUS} — check: kubectl describe secretstore vault-backend -n external-secrets"
 
+  kubectl apply -f - <<MANIFEST
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: vault-pusher
+spec:
+  provider:
+    vault:
+      server: "${VAULT_URL}"
+      path: "kv"
+      version: "v2"
+      auth:
+        kubernetes:
+          mountPath: "${MOUNT}"
+          role: "cert-pusher"
+          serviceAccountRef:
+            name: "cert-pusher"
+            namespace: "cert-manager"
+            audiences:
+              - vault 
+MANIFEST
+  ok "ClusterSecretStore/vault-pusher applied"
+
 else
   kubectl apply -f - <<MANIFEST
 apiVersion: external-secrets.io/v1
@@ -292,7 +327,7 @@ MANIFEST
     2>/dev/null || echo "Unknown")
   [[ "$STATUS" == "True" ]] \
     && ok "ClusterSecretStore is Ready" \
-    || echo "    ⚠ ClusterSecretStore status: ${STATUS} — check: kubectl describe clustersecretstore vault-backend-access"
+    || echo "    ClusterSecretStore status: ${STATUS} — check: kubectl describe clustersecretstore vault-backend-access"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -305,7 +340,7 @@ if [[ "$TYPE" == "primary" ]]; then
   echo "  Store      : SecretStore/vault-backend (ns: external-secrets)"
   echo ""
   echo "  Next: apply PushSecret once cert-manager has issued a cert:"
-  echo "    kubectl apply -f clusters/rancher-master/pushsecret.yaml"
+  echo "    kubectl apply -f clusters/${MOUNT}/pushsecret.yaml"
 else
   echo "  Roles      : external-secrets"
   echo "  Store      : ClusterSecretStore/vault-backend-access"

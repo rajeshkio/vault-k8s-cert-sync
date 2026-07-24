@@ -1,5 +1,5 @@
 # cert-manager-policy.hcl
-# Used by: cert-manager SA and cert-pusher SA on rancher-master
+# Used by: cert-manager SA and cert-pusher SA on the primary cluster
 # Purpose: read/write certificates into Vault KV v2
 
 path "kv/*" {
