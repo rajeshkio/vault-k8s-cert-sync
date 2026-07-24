@@ -78,13 +78,98 @@ vault-k8s-cert-sync/
 
 ## Prerequisites
 
-- Kubernetes cluster with `kubectl` access
+### Primary cluster (where Vault and cert-manager run)
+
+- cert-manager 
+- External Secrets Operator 
 - Vault deployed and unsealed (see Vault Deployment below)
-- cert-manager installed on the primary cluster
-- External Secrets Operator v2.x installed on all clusters
-- Vault accessible at a resolvable URL from all clusters
+- A ClusterIssuer configured for your DNS provider (Cloudflare, Route53 etc)
+
+### Secondary clusters (that pull secrets from Vault)
+
+- External Secrets Operator v2.x
+
+### General
+
+- kubectl configured with contexts for all clusters
+- Vault accessible at a URL resolvable from all clusters
+- Helm 3.x for Vault deployment
 
 ---
+
+### Installing cert-manager
+
+**Via Helm:**
+```bash
+helm repo add jetstack https://charts.jetstack.io
+helm repo update jetstack
+
+helm upgrade --install cert-manager jetstack/cert-manager \
+  -n cert-manager \
+  --create-namespace \
+  --set crds.enabled=true \
+  --set extraArgs[0]="--dns01-recursive-nameservers-only" \
+  --set extraArgs[1]="--dns01-recursive-nameservers=1.1.1.1:53,8.8.8.8:53" \
+  --wait
+
+kubectl get pods -n cert-manager
+```
+
+The `dns01-recursive-nameservers` args force cert-manager to use public
+resolvers when checking DNS TXT record propagation. Without this, it uses
+cluster-internal DNS which cannot see Cloudflare TXT records.
+
+**Then create a ClusterIssuer for your DNS provider.** Example for Cloudflare:
+
+```bash
+# Create the Cloudflare API token secret first
+kubectl create secret generic cloudflare-api-token \
+  --from-literal=api-token=<YOUR_CLOUDFLARE_TOKEN> \
+  -n cert-manager
+```
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: your@email.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - dns01:
+        cloudflare:
+          apiTokenSecretRef:
+            name: cloudflare-api-token
+            key: api-token
+```
+
+```bash
+kubectl apply -f clusterissuer.yaml
+kubectl get clusterissuer letsencrypt-prod -w
+```
+
+---
+
+### Installing External Secrets Operator
+
+**Via Helm:**
+```bash
+helm repo add external-secrets https://charts.external-secrets.io
+helm repo update external-secrets
+
+helm upgrade --install external-secrets external-secrets/external-secrets \
+  -n external-secrets \
+  --create-namespace \
+  --wait
+
+kubectl get pods -n external-secrets
+```
+
+Install on every cluster that needs to pull secrets from Vault.
 
 ## Vault Deployment
 
