@@ -4,6 +4,7 @@
 *.crt
 *.key
 *.pem
+suse-ai.env
 
 # Editor files
 .DS_Store

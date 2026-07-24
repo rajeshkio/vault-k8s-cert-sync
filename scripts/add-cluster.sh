@@ -36,48 +36,47 @@ VAULT_POD="vault-0"
 VAULT_CONTEXT=$(kubectl config current-context)
 echo "Vault context (current): ${VAULT_CONTEXT}"
 
-# ── Argument parsing ─────────────────────────────────────────────────────────
-CONTEXT=""
-KUBE_HOST=""
-MOUNT=""
-TYPE=""
-VAULT_URL=""
+# --------- Load env file -----------------------------------------------------
+ENV_FILE="${1:-}"
+[[ -z "$ENV_FILE" ]]      && echo "ERROR: env file required. Usage: ./scripts/add-cluster.sh mycluster.env" && exit 1
+[[ ! -f "$ENV_FILE" ]]    && echo "ERROR: env file not found: ${ENV_FILE}" && exit 1
 
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --context)   CONTEXT="$2";   shift 2 ;;
-    --kube-host) KUBE_HOST="$2"; shift 2 ;;
-    --mount)     MOUNT="$2";     shift 2 ;;
-    --type)      TYPE="$2";      shift 2 ;;
-    --vault-url)     VAULT_URL="$2";     shift 2 ;;
-    *) echo "ERROR: Unknown argument: $1"; exit 1 ;;
-  esac
-done
+# shellcheck source=/dev/null
+source "${ENV_FILE}"
 
-# ── Validate ─────────────────────────────────────────────────────────────────
-[[ -z "$CONTEXT"   ]] && echo "ERROR: --context is required"   && exit 1
-[[ -z "$KUBE_HOST" ]] && echo "ERROR: --kube-host is required" && exit 1
-[[ -z "$MOUNT"     ]] && echo "ERROR: --mount is required"     && exit 1
-[[ -z "$TYPE"      ]] && echo "ERROR: --type must be primary|secondary" && exit 1
-[[ -z "$VAULT_URL"     ]] && echo "ERROR: --vault-url is required"     && exit 1
+# --------- Validate ----------------------------------------------------------
+[[ -z "${CONTEXT:-}"   ]] && echo "ERROR: CONTEXT is required in ${ENV_FILE}"   && exit 1
+[[ -z "${KUBE_HOST:-}" ]] && echo "ERROR: KUBE_HOST is required in ${ENV_FILE}" && exit 1
+[[ -z "${MOUNT:-}"     ]] && echo "ERROR: MOUNT is required in ${ENV_FILE}"     && exit 1
+[[ -z "${TYPE:-}"      ]] && echo "ERROR: TYPE is required in ${ENV_FILE}"      && exit 1
+[[ -z "${VAULT_URL:-}" ]] && echo "ERROR: VAULT_URL is required in ${ENV_FILE}" && exit 1
+
 [[ "$TYPE" != "primary" && "$TYPE" != "secondary" ]] && \
-  echo "ERROR: --type must be 'primary' or 'secondary'" && exit 1
+  echo "ERROR: TYPE must be 'primary' or 'secondary'" && exit 1
+
+if [[ "$TYPE" == "primary" ]]; then
+  [[ -z "${SECRET_NAME:-}"      ]] && echo "ERROR: SECRET_NAME is required for primary clusters"      && exit 1
+  [[ -z "${SECRET_NAMESPACE:-}" ]] && echo "ERROR: SECRET_NAMESPACE is required for primary clusters" && exit 1
+  [[ -z "${VAULT_PATH:-}"       ]] && echo "ERROR: VAULT_PATH is required for primary clusters"       && exit 1
+fi
 
 log()     { echo ""; echo "==> $1"; }
-ok()      { echo "    ✓ $1"; }
-section() { echo ""; echo "────────────────────────────────────────────"; \
-            echo "  $1"; \
-            echo "────────────────────────────────────────────"; }
+ok()      { echo "    $1"; }
+section() { echo ""; echo "--------------------------------------------------"
+            echo "  $1"
+            echo "----------------------------------------------"; }
 
 section "Adding cluster: ${CONTEXT} (${TYPE})"
+echo "  Env file   : ${ENV_FILE}"
 echo "  Auth mount : ${MOUNT}"
 echo "  Kube host  : ${KUBE_HOST}"
+echo "  Vault URL  : ${VAULT_URL}"
 
 # vault-auth SA namespace
 VAULT_AUTH_NS="kube-system"
 [[ "$TYPE" == "primary" ]] && VAULT_AUTH_NS="vault"
 
-# ── Step 1: Kubernetes resources on target cluster ───────────────────────────
+# --------- Step 1: Kubernetes resources on target cluster ----------------------
 log "Step 1: Creating Kubernetes resources on ${CONTEXT}"
 kubectl config use-context "${CONTEXT}"
 
@@ -149,7 +148,7 @@ MANIFEST
   ok "cert-manager + cert-pusher SAs applied"
 fi
 
-# ── Step 2: Reviewer token + CA cert ─────────────────────────────────────────
+# --------- Step 2: Reviewer token + CA cert ---------------------------------
 log "Step 2: Generating reviewer token and CA cert"
 
 CA_FILE="/tmp/vault-${CONTEXT}-ca.crt"
@@ -165,7 +164,7 @@ kubectl create token vault-auth \
   --duration=8760h > "${TOKEN_FILE}"
 ok "Reviewer token: ${TOKEN_FILE}"
 
-# ── Step 3: Copy into Vault pod ───────────────────────────────────────────────
+# --------- Step 3: Copy into Vault pod -----------------------------------------
 log "Step 3: Copying files into Vault pod"
 kubectl config use-context "${VAULT_CONTEXT}"
 
@@ -175,7 +174,7 @@ kubectl -n "${VAULT_NS}" cp "${TOKEN_FILE}" \
   "${VAULT_POD}:/tmp/vault-${CONTEXT}-reviewer.jwt"
 ok "Files copied to ${VAULT_POD}"
 
-# ── Step 4: Configure Vault auth mount ───────────────────────────────────────
+# --------- Step 4: Configure Vault auth mount ----------------------------------- 
 log "Step 4: Configuring Vault auth mount: ${MOUNT}"
 
 kubectl -n "${VAULT_NS}" exec "${VAULT_POD}" -- sh -c "
@@ -185,7 +184,7 @@ kubectl -n "${VAULT_NS}" exec "${VAULT_POD}" -- sh -c "
     echo '    auth/${MOUNT}/ already exists — reconfiguring'
   else
     vault auth enable -path=${MOUNT} kubernetes
-    echo '    ✓ auth/${MOUNT}/ enabled'
+    echo '    auth/${MOUNT}/ enabled'
   fi
 
   vault write auth/${MOUNT}/config \
@@ -193,11 +192,11 @@ kubectl -n "${VAULT_NS}" exec "${VAULT_POD}" -- sh -c "
     kubernetes_ca_cert=@/tmp/vault-${CONTEXT}-ca.crt \
     token_reviewer_jwt=@/tmp/vault-${CONTEXT}-reviewer.jwt
 
-  echo '    ✓ auth/${MOUNT}/ configured'
+  echo '    auth/${MOUNT}/ configured'
   vault read auth/${MOUNT}/config
 "
 
-# ── Step 5: Create Vault roles ────────────────────────────────────────────────
+# ------------ Step 5: Create Vault roles ----------------------------------------- 
 log "Step 5: Creating Vault roles"
 
 kubectl -n "${VAULT_NS}" exec "${VAULT_POD}" -- sh -c "
@@ -209,7 +208,7 @@ kubectl -n "${VAULT_NS}" exec "${VAULT_POD}" -- sh -c "
     policies=external-secrets-policy \
     ttl=1h \
     audience=vault
-  echo '    ✓ external-secrets role created'
+  echo '    external-secrets role created'
 "
 
 if [[ "$TYPE" == "primary" ]]; then
@@ -222,7 +221,7 @@ if [[ "$TYPE" == "primary" ]]; then
       policies=cert-manager-policy \
       ttl=1h \
       audience=vault
-    echo '    ✓ cert-manager role created'
+    echo '    cert-manager role created'
 
     vault write auth/${MOUNT}/role/cert-pusher \
       bound_service_account_names=cert-pusher \
@@ -231,11 +230,11 @@ if [[ "$TYPE" == "primary" ]]; then
       ttl=24h \
       max_ttl=48h \
       audience=vault
-    echo '    ✓ cert-pusher role created'
+    echo '    cert-pusher role created'
   "
 fi
 
-# ── Step 6: SecretStore / ClusterSecretStore ──────────────────────────────────
+# ----------  Step 6: SecretStore / ClusterSecretStore -------------------------------
 log "Step 6: Applying SecretStore on ${CONTEXT}"
 kubectl config use-context "${CONTEXT}"
 
@@ -271,7 +270,7 @@ MANIFEST
     2>/dev/null || echo "Unknown")
   [[ "$STATUS" == "True" ]] \
     && ok "SecretStore is Ready" \
-    || echo "    ⚠ SecretStore status: ${STATUS} — check: kubectl describe secretstore vault-backend -n external-secrets"
+    || echo "    SecretStore status: ${STATUS} — check: kubectl describe secretstore vault-backend -n external-secrets"
 
   kubectl apply -f - <<MANIFEST
 apiVersion: external-secrets.io/v1
@@ -330,17 +329,53 @@ MANIFEST
     || echo "    ClusterSecretStore status: ${STATUS} — check: kubectl describe clustersecretstore vault-backend-access"
 fi
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# --------- Step 7: PushSecret (primary only) ---------------------------------
+if [[ "$TYPE" == "primary" ]]; then
+  log "Step 7: Applying PushSecret"
+  kubectl config use-context "${CONTEXT}"
+
+  kubectl apply -f - <<MANIFEST
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: push-${SECRET_NAME}
+  namespace: ${SECRET_NAMESPACE}
+spec:
+  refreshInterval: 10m
+  secretStoreRefs:
+  - name: vault-pusher
+    kind: ClusterSecretStore
+  selector:
+    secret:
+      name: ${SECRET_NAME}
+  data:
+  - match:
+      secretKey: tls.crt
+      remoteRef:
+        remoteKey: ${VAULT_PATH}
+        property: tls.crt
+  - match:
+      secretKey: tls.key
+      remoteRef:
+        remoteKey: ${VAULT_PATH}
+        property: tls.key
+MANIFEST
+  ok "PushSecret/push-${SECRET_NAME} applied in namespace ${SECRET_NAMESPACE}"
+  echo "    Note: PushSecret will sync once secret '${SECRET_NAME}' exists in namespace '${SECRET_NAMESPACE}'"
+fi
+
+# --------- Summary ------------------------------------------------
 section "Done: ${CONTEXT} added to Vault"
 echo "  Context    : ${CONTEXT}"
 echo "  Auth mount : ${MOUNT}/"
 echo "  Type       : ${TYPE}"
 if [[ "$TYPE" == "primary" ]]; then
   echo "  Roles      : external-secrets, cert-manager, cert-pusher"
-  echo "  Store      : SecretStore/vault-backend (ns: external-secrets)"
+  echo "  Stores     : SecretStore/vault-backend, ClusterSecretStore/vault-pusher"
+  echo "  PushSecret : push-${SECRET_NAME} (ns: ${SECRET_NAMESPACE})"
   echo ""
-  echo "  Next: apply PushSecret once cert-manager has issued a cert:"
-  echo "    kubectl apply -f clusters/${MOUNT}/pushsecret.yaml"
+  echo "  Check sync status:"
+  echo "    kubectl get pushsecret push-${SECRET_NAME} -n ${SECRET_NAMESPACE} -w"
 else
   echo "  Roles      : external-secrets"
   echo "  Store      : ClusterSecretStore/vault-backend-access"

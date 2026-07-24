@@ -21,7 +21,7 @@ VAULT_CONTEXT=$(kubectl config current-context)
 echo "    Using context: ${VAULT_CONTEXT}"
 
 log() { echo ""; echo "==> $1"; }
-ok()  { echo "    ✓ $1"; }
+ok()  { echo "    $1"; }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

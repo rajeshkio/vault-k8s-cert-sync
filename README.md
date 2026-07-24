@@ -59,19 +59,18 @@ is set on the role.
 
 ```
 vault-k8s-cert-sync/
-├── vault/
-│   ├── values.yaml                     # Helm values for single-node deployment
-│   └── policies/
-│       ├── cert-manager-policy.hcl     # read/write to kv/*
-│       └── external-secrets-policy.hcl # read-only from kv/*
-├── clusters/
-│   └── <primary-cluster/mount>/
-│       └── pushsecret.yaml             # PushSecret for cert to Vault
-├── scripts/
-│   ├── bootstrap-vault.sh              # run once after unseal
-│   ├── add-cluster.sh                  # add any cluster with one command
-│   └── 02-test-externalsecret.sh       # verify end-to-end sync
-└── README.md
+|-- vault/
+|   |-- values.yaml                     # Helm values for single-node deployment
+|   |-- policies/
+|       |-- cert-manager-policy.hcl     # read/write to kv/*
+|       |-- external-secrets-policy.hcl # read-only from kv/*
+|
+|-- scripts/
+|   |-- bootstrap-vault.sh              # run once after unseal
+|   |-- add-cluster.sh                  # add any cluster with one command
+|   |-- 02-test-externalsecret.sh       # verify end-to-end sync
+|-- env.example                         # template — copy and fill in your values
+|-- README.md
 ```
 
 ---
@@ -199,7 +198,7 @@ kubectl -n vault exec vault-0 -- \
     -format=json > vault-init-keys.json
 ```
 
-⚠️ Back up `vault-init-keys.json` immediately. It is gitignored and will
+Back up `vault-init-keys.json` immediately. It is gitignored and will
 never be committed. This is the only time you will see these keys.
 
 ### Unseal
@@ -236,27 +235,37 @@ Run once after unseal. Enables KV v2 and applies both policies.
 ```
 
 Expected output:
+```
+Vault context (current): default
+
+==> Enabling KV v2 secret engine
+    KV v2 ready at kv/
+
+==> Applying policies
+    Policies applied
+```
 
 ### Step 2 — Add clusters
 
-Add the primary cluster (cert-manager + cert-pusher + external-secrets roles):
+Configuration is driven by env files — one per cluster. Copy the example and fill in your values:
 
 ```bash
-./scripts/add-cluster.sh \
-  --context <kubectl-context> \
-  --kube-host https://<API-SERVER-IP>:6443 \
-  --mount <auth-mount-name> \
-  --type primary
+cp env.example suse-ai.env
+# edit suse-ai.env
 ```
 
-Add any secondary cluster (external-secrets role only):
+Add the primary cluster:
 
 ```bash
-./scripts/add-cluster.sh \
-  --context <kubectl-context> \
-  --kube-host https://<API-SERVER-IP>:6443 \
-  --mount <auth-mount-name> \
-  --type secondary
+./scripts/add-cluster.sh suse-ai.env
+```
+
+Add any secondary cluster:
+
+```bash
+cp env.example k3s-server.env
+# edit k3s-server.env — set TYPE=secondary
+./scripts/add-cluster.sh k3s-server.env
 ```
 
 The script handles everything in one shot:
@@ -265,39 +274,32 @@ The script handles everything in one shot:
 - Generates reviewer token and CA cert
 - Enables and configures the Vault auth mount
 - Creates Vault roles
-- Applies SecretStore (primary) or ClusterSecretStore (secondary)
-- Verifies the store is Ready
+- Applies SecretStore and ClusterSecretStore/vault-pusher (primary)
+- Applies ClusterSecretStore/vault-backend-access (secondary)
+- Generates and applies PushSecret (primary only)
+- Verifies all stores are Ready
+  
 
-### Step 3 — Apply PushSecret
-
-Once cert-manager has issued a certificate on the primary cluster:
-
-```bash
-kubectl apply -f clusters/<primary-cluster/mount>/pushsecret.yaml
-kubectl get pushsecret push-rajesh-cert -n certificates -w
-```
-
-### Step 4 — Verify
+### Step 3 — Verify
 
 ```bash
-./scripts/02-test-externalsecret.sh
+./scripts/02-test-externalsecret.sh suse-ai.env k3s-server.env
 ```
 
 ---
 
 ## Adding a New Cluster
 
-One command:
+Copy the example env file, fill in the values, run the script:
 
 ```bash
-./scripts/add-cluster.sh \
-  --context new-cluster \
-  --kube-host https://192.168.1.200:6443 \
-  --mount new-cluster \
-  --type secondary
+cp env.example new-cluster.env
+# edit new-cluster.env
+
+./scripts/add-cluster.sh new-cluster.env
 ```
 
-No files to create. No directories to add. No manual kubectl exec.
+No directories to create. No hardcoded names. No manual kubectl exec.
 
 ---
 
@@ -342,10 +344,12 @@ kubectl describe secretstore vault-backend -n external-secrets
 
 **PushSecret not syncing**
 
-Confirm the source secret exists and the cert-pusher role has write access:
+Confirm the source secret exists in the configured namespace and the
+cert-pusher role has write access to Vault KV:
 
 ```bash
-kubectl describe pushsecret push-rajesh-cert -n certificates
+kubectl describe pushsecret push-<SECRET_NAME> -n <SECRET_NAMESPACE>
+kubectl -n vault exec vault-0 -- vault read auth/<MOUNT>/role/cert-pusher
 ```
 
 ---
@@ -356,3 +360,4 @@ kubectl describe pushsecret push-rajesh-cert -n certificates
 - [External Secrets Operator docs](https://external-secrets.io)
 - [HashiCorp Vault Kubernetes auth](https://developer.hashicorp.com/vault/docs/auth/kubernetes)
 - [Vault Secrets Operator](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso)
+

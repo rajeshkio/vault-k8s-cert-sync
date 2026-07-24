@@ -1,25 +1,21 @@
 #!/usr/bin/env bash
 # scripts/02-test-externalsecret.sh
 #
-# Creates a test ExternalSecret on each cluster and verifies sync.
+# Tests ExternalSecret sync against all clusters passed as env files.
 #
-# Usage:
-#   ./scripts/02-test-externalsecret.sh \
-#     --primary <context> \
-#     [--secondary <context>] \
-#     [--secondary <context>]
+# USAGE:
+#   ./scripts/02-test-externalsecret.sh <primary.env> [secondary.env ...]
 #
 # Example:
 #   ./scripts/02-test-externalsecret.sh \
-#     --primary default \
-#     --secondary k3s-server \
-#     --secondary rke2-server
-# Assumes the PushSecret has already synced "rajesh-tls-cert" to Vault.
+#     suse-ai.env \
+#     k3s-server.env
 
 set -euo pipefail
 
-PASS=0
-FAIL=0
+[[ $# -eq 0 ]] && echo "ERROR: at least one env file required" && exit 1
+
+PASS=0; FAIL=0
 
 run_test() {
   local context="$1"
@@ -61,58 +57,49 @@ EOF
 
   STATUS=$(kubectl get externalsecret test-vault-cert-sync \
     -n "${namespace}" \
-    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' \
+    2>/dev/null || echo "Unknown")
 
   if [ "${STATUS}" = "True" ]; then
-    echo "    ✓ ExternalSecret synced successfully on ${context}"
-    kubectl get secret test-tls-cert -n "${namespace}" \
-      -o jsonpath='{.data}' | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print('    Keys found:', list(d.keys()))
-"
+    echo "    ExternalSecret synced on ${context}"
     PASS=$((PASS + 1))
   else
-    echo "    ✗ ExternalSecret NOT ready on ${context} (status: ${STATUS})"
-    echo "    Describing ExternalSecret for details:"
-    kubectl describe externalsecret test-vault-cert-sync -n "${namespace}" | tail -20
+    echo "    ExternalSecret NOT ready on ${context} (status: ${STATUS})"
+    kubectl describe externalsecret test-vault-cert-sync \
+      -n "${namespace}" | tail -15
     FAIL=$((FAIL + 1))
   fi
 }
 
-# ── Argument parsing ──────────────────────────────────────────────────────────
+# ── Run tests from env files ──────────────────────────────────────────────────
+ALL_CONTEXTS=()
 
-PRIMARY_CONTEXTS=()
-SECONDARY_CONTEXTS=()
+for env_file in "$@"; do
+  [[ ! -f "$env_file" ]] && echo "ERROR: env file not found: ${env_file}" && exit 1
+  source "${env_file}"
 
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --primary)   PRIMARY_CONTEXTS+=("$2");   shift 2 ;;
-    --secondary) SECONDARY_CONTEXTS+=("$2"); shift 2 ;;
-    *) echo "ERROR: Unknown argument: $1"; exit 1 ;;
-  esac
+  ALL_CONTEXTS+=("${CONTEXT}")
+
+  if [[ "${TYPE}" == "primary" ]]; then
+    run_test "${CONTEXT}" "SecretStore" "vault-backend" "external-secrets"
+  else
+    run_test "${CONTEXT}" "ClusterSecretStore" "vault-backend-access" "external-secrets"
+  fi
 done
 
-[[ ${#PRIMARY_CONTEXTS[@]} -eq 0 ]] \
-  && echo "ERROR: at least one --primary context is required" && exit 1
-
-for ctx in "${PRIMARY_CONTEXTS[@]}"; do
-  run_test "${ctx}" "SecretStore" "vault-backend" "external-secrets"
-done
-
-for ctx in "${SECONDARY_CONTEXTS[@]}"; do
-  run_test "${ctx}" "ClusterSecretStore" "vault-backend-access" "external-secrets"
-done
-
+# ── Results ───────────────────────────────────────────────────────────────────
 echo ""
 echo "==> Test results: ${PASS} passed, ${FAIL} failed"
 
 echo ""
-echo "==> Cleaning up test ExternalSecrets..."
-for ctx in "${PRIMARY_CONTEXTS[@]}" "${SECONDARY_CONTEXTS[@]}"; do
-  kubectl config use-context "${ctx}"
-  kubectl delete externalsecret test-vault-cert-sync -n external-secrets --ignore-not-found
-  kubectl delete secret test-tls-cert -n external-secrets --ignore-not-found
+echo "==> Cleaning up..."
+for env_file in "$@"; do
+  source "${env_file}"
+  kubectl config use-context "${CONTEXT}"
+  kubectl delete externalsecret test-vault-cert-sync \
+    -n external-secrets --ignore-not-found
+  kubectl delete secret test-tls-cert \
+    -n external-secrets --ignore-not-found
 done
 echo "    Cleanup done."
 
